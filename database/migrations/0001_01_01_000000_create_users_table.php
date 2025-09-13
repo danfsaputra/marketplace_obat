@@ -11,29 +11,12 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('users', function (Blueprint $table) {
-            $table->id();
-            $table->string('name');
-            $table->string('email')->unique();
-            $table->timestamp('email_verified_at')->nullable();
-            $table->string('password');
-            $table->rememberToken();
-            $table->timestamps();
-        });
-
-        Schema::create('password_reset_tokens', function (Blueprint $table) {
-            $table->string('email')->primary();
-            $table->string('token');
-            $table->timestamp('created_at')->nullable();
-        });
-
-        Schema::create('sessions', function (Blueprint $table) {
-            $table->string('id')->primary();
-            $table->foreignId('user_id')->nullable()->index();
-            $table->string('ip_address', 45)->nullable();
-            $table->text('user_agent')->nullable();
-            $table->longText('payload');
-            $table->integer('last_activity')->index();
+        Schema::table('users', function (Blueprint $table) {
+            $table->date('date_of_birth')->nullable()->after('name');
+            $table->string('gender')->nullable()->after('date_of_birth');
+            $table->text('address')->nullable()->after('gender');
+            $table->string('phone')->nullable()->after('address');
+            $table->string('payment_number')->nullable()->after('phone');
         });
     }
 
@@ -42,8 +25,14 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('users');
-        Schema::dropIfExists('password_reset_tokens');
-        Schema::dropIfExists('sessions');
+        Schema::table('users', function (Blueprint $table) {
+            $table->dropColumn([
+                'date_of_birth',
+                'gender',
+                'address',
+                'phone',
+                'payment_number'
+            ]);
+        });
     }
 };

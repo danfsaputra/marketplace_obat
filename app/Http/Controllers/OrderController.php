@@ -2,89 +2,72 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Order;
+use App\Models\CartItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use App\Models\CartItem;
-use App\Models\Order;
-use App\Models\OrderItem;
-use App\Models\Product;
 use Illuminate\Support\Facades\DB;
 
 class OrderController extends Controller
 {
-    public function checkout()
+    /**
+     * Menampilkan halaman ringkasan checkout.
+     */
+    public function showCheckoutPage()
     {
-        // Ganti nama variabel dari $cartItems menjadi $items agar sesuai dengan view
-        $items = CartItem::with('product')->where('user_id', Auth::id())->get();
-        
-        if ($items->isEmpty()) {
-            return redirect()->route('cart.index')->with('error', 'Keranjang belanja Anda kosong.');
-        }
+        $cartItems = CartItem::where('user_id', Auth::id())->with('product')->get();
 
-        $total = $items->sum(function ($item) {
+        if ($cartItems->isEmpty()) {
+            return redirect()->route('cart.index')->with('error', 'Keranjang Anda kosong. Tidak bisa melanjutkan ke checkout.');
+        }
+        
+        // Menghitung total untuk ditampilkan di halaman checkout
+        $totalAmount = $cartItems->sum(function($item) {
             return $item->product->price * $item->quantity;
         });
 
-        // Kirim $items ke view
-        return view('checkout', compact('items', 'total'));
+        return view('checkout', compact('cartItems', 'totalAmount'));
     }
 
     /**
-     * FUNGSI BARU UNTUK MEMPROSES PESANAN
+     * Memproses pesanan dari halaman checkout.
      */
     public function placeOrder(Request $request)
     {
-        $request->validate([
-            'address' => 'required|string|max:255',
-            'payment_method' => 'required|string',
-        ]);
-
-        $cartItems = CartItem::with('product')->where('user_id', Auth::id())->get();
+        $user = Auth::user();
+        $cartItems = CartItem::where('user_id', $user->id)->with('product')->get();
 
         if ($cartItems->isEmpty()) {
-            return redirect()->route('home')->with('error', 'Tidak ada item di keranjang untuk dipesan.');
+            return redirect()->route('home')->with('error', 'Keranjang Anda kosong.');
         }
 
-        DB::beginTransaction();
-
-        try {
+        // Gunakan DB Transaction untuk memastikan semua operasi berhasil
+        DB::transaction(function () use ($user, $cartItems) {
+            // Hitung total harga
             $totalAmount = $cartItems->sum(function ($item) {
                 return $item->product->price * $item->quantity;
             });
 
-            // Status 'pending' berarti pesanan menunggu verifikasi admin
+            // 1. Buat pesanan baru
             $order = Order::create([
-                'user_id' => Auth::id(),
-                // INI ADALAH BARIS PERBAIKANNYA
-                'order_number' => 'INV-' . now()->format('Ymd') . '-' . strtoupper(uniqid()),
+                'user_id' => $user->id,
                 'total_amount' => $totalAmount,
-                'status' => 'pending', 
-                'shipping_address' => $request->address,
-                'payment_method' => $request->payment_method,
-                'payment_status' => 'unpaid',
+                'status' => 'pending', // Status awal pesanan
             ]);
 
-            foreach ($cartItems as $cartItem) {
-                OrderItem::create([
-                    'order_id' => $order->id,
-                    'product_id' => $cartItem->product_id,
-                    'quantity' => $cartItem->quantity,
-                    'price' => $cartItem->product->price,
+            // 2. Pindahkan item dari keranjang ke item pesanan
+            foreach ($cartItems as $item) {
+                $order->items()->create([
+                    'product_id' => $item->product_id,
+                    'quantity' => $item->quantity,
+                    'price' => $item->product->price,
                 ]);
-
-                // LOGIKA PENGURANGAN STOK DIHAPUS DARI SINI
-                // Akan dipindahkan ke proses verifikasi oleh admin
             }
 
-            CartItem::where('user_id', Auth::id())->delete();
-            
-            DB::commit();
+            // 3. Kosongkan keranjang pengguna
+            CartItem::where('user_id', $user->id)->delete();
+        });
 
-            return redirect()->route('home')->with('success', 'Pesanan Anda berhasil dibuat dan sedang menunggu verifikasi admin.');
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return redirect()->back()->with('error', 'Terjadi kesalahan saat memproses pesanan. Error: ' . $e->getMessage());
-        }
+        return redirect()->route('home')->with('success', 'Pesanan Anda berhasil dibuat!');
     }
 }

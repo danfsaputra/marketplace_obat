@@ -12,33 +12,37 @@ use Illuminate\View\View;
 class ProfileController extends Controller
 {
     /**
-     * Display the user's profile form.
+     * Menampilkan formulir profil pengguna.
      */
     public function edit(Request $request): View
     {
+        // Pastikan view 'profile.edit' menerima data pengguna
         return view('profile.edit', [
             'user' => $request->user(),
         ]);
     }
 
     /**
-     * Update the user's profile information.
+     * Memperbarui informasi profil pengguna.
      */
     public function update(ProfileUpdateRequest $request): RedirectResponse
     {
+        // Mengisi semua data yang tervalidasi ke model user
         $request->user()->fill($request->validated());
 
+        // Reset verifikasi email jika email diubah
         if ($request->user()->isDirty('email')) {
             $request->user()->email_verified_at = null;
         }
 
+        // Simpan semua perubahan
         $request->user()->save();
 
         return Redirect::route('profile.edit')->with('status', 'profile-updated');
     }
 
     /**
-     * Delete the user's account.
+     * Menghapus akun pengguna.
      */
     public function destroy(Request $request): RedirectResponse
     {
@@ -58,3 +62,4 @@ class ProfileController extends Controller
         return Redirect::to('/');
     }
 }
+
