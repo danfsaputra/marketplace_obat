@@ -1,83 +1,90 @@
 <?php
+
 namespace App\Http\Controllers;
+
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use App\Models\CartItem;
 use App\Models\Order;
 use App\Models\OrderItem;
-use App\Models\Payment;
-use App\Mail\OrderInvoiceMail;
-use Barryvdh\DomPDF\Facade\Pdf;
-use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\Auth;
+use App\Models\Product;
+use Illuminate\Support\Facades\DB;
 
 class OrderController extends Controller
 {
-    use \Illuminate\Foundation\Auth\Access\AuthorizesRequests;
     public function checkout()
     {
+        // Ganti nama variabel dari $cartItems menjadi $items agar sesuai dengan view
         $items = CartItem::with('product')->where('user_id', Auth::id())->get();
-        if($items->isEmpty()) return redirect()->route('cart.index')->with('error','Keranjang kosong');
-        $total = $items->sum(fn($i)=> $i->quantity * $i->product->price);
-        return view('checkout', compact('items','total'));
+        
+        if ($items->isEmpty()) {
+            return redirect()->route('cart.index')->with('error', 'Keranjang belanja Anda kosong.');
+        }
+
+        $total = $items->sum(function ($item) {
+            return $item->product->price * $item->quantity;
+        });
+
+        // Kirim $items ke view
+        return view('checkout', compact('items', 'total'));
     }
 
-    public function place(Request $r)
+    /**
+     * FUNGSI BARU UNTUK MEMPROSES PESANAN
+     */
+    public function placeOrder(Request $request)
     {
-        $user = Auth::user();
-        $user = Auth::user();
-        $items = CartItem::with('product')->where('user_id',$user->id)->get();
-        if($items->isEmpty()) return back()->with('error','Keranjang kosong');
-
-        $total = $items->sum(fn($i)=> $i->product->price * $i->quantity);
-
-        $order = Order::create([
-            'user_id'=>$user->id,
-            'order_number'=>'ORD'.time().rand(100,999),
-            'total'=>$total,
-            'status'=>'pending',
-            'address'=>$r->address,
+        $request->validate([
+            'address' => 'required|string|max:255',
+            'payment_method' => 'required|string',
         ]);
 
-        foreach($items as $it){
-            OrderItem::create([
-                'order_id'=>$order->id,
-                'product_id'=>$it->product->id,
-                'quantity'=>$it->quantity,
-                'price'=>$it->product->price,
+        $cartItems = CartItem::with('product')->where('user_id', Auth::id())->get();
+
+        if ($cartItems->isEmpty()) {
+            return redirect()->route('home')->with('error', 'Tidak ada item di keranjang untuk dipesan.');
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $totalAmount = $cartItems->sum(function ($item) {
+                return $item->product->price * $item->quantity;
+            });
+
+            // Status 'pending' berarti pesanan menunggu verifikasi admin
+            $order = Order::create([
+                'user_id' => Auth::id(),
+                // INI ADALAH BARIS PERBAIKANNYA
+                'order_number' => 'INV-' . now()->format('Ymd') . '-' . strtoupper(uniqid()),
+                'total_amount' => $totalAmount,
+                'status' => 'pending', 
+                'shipping_address' => $request->address,
+                'payment_method' => $request->payment_method,
+                'payment_status' => 'unpaid',
             ]);
-            // reduce stock
-            $it->product->decrement('stock', $it->quantity);
+
+            foreach ($cartItems as $cartItem) {
+                OrderItem::create([
+                    'order_id' => $order->id,
+                    'product_id' => $cartItem->product_id,
+                    'quantity' => $cartItem->quantity,
+                    'price' => $cartItem->product->price,
+                ]);
+
+                // LOGIKA PENGURANGAN STOK DIHAPUS DARI SINI
+                // Akan dipindahkan ke proses verifikasi oleh admin
+            }
+
+            CartItem::where('user_id', Auth::id())->delete();
+            
+            DB::commit();
+
+            return redirect()->route('home')->with('success', 'Pesanan Anda berhasil dibuat dan sedang menunggu verifikasi admin.');
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return redirect()->back()->with('error', 'Terjadi kesalahan saat memproses pesanan. Error: ' . $e->getMessage());
         }
-
-        Payment::create([
-            'order_id'=>$order->id,
-            'amount'=>$total,
-            'method'=>$r->payment_method ?? 'Di Tempat',
-            'status'=> $r->payment_method == 'Prepaid' ? 'completed' : 'pending'
-        ]);
-
-        CartItem::where('user_id',$user->id)->delete();
-
-        // generate pdf and send email
-        $pdf = PDF::loadView('pdf.invoice', compact('order'))->output();
-        Mail::to($user->email)->send(new OrderInvoiceMail($order, $pdf));
-
-        return redirect()->route('home')->with('success','Pesanan berhasil dibuat. Invoice dikirim lewat email.');
-    }
-
-    public function invoice(Order $order)
-    {
-        $this->authorize('view', $order);
-        $pdf = PDF::loadView('pdf.invoice', compact('order'));
-        return $pdf->download("invoice-{$order->order_number}.pdf");
-    }
-
-    public function cancel(Request $r, Order $order)
-    {
-        if($order->status !== 'shipped'){
-            $order->update(['status'=>'cancelled']);
-            return back()->with('success','Order berhasil dibatalkan.');
-        }
-        return back()->with('error','Order sudah dikirim tidak bisa dibatalkan.');
     }
 }
